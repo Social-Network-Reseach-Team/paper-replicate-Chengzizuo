@@ -1,0 +1,613 @@
+---
+title: "Untitled"
+output: html_document
+date: "2022-07-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages(suppressWarnings({
+  library(igraph)
+  library(progress)
+  library(tidyverse)
+  library(ggthemes)
+  library(RColorBrewer)
+  library(reticulate)
+  library(parallel)
+  library(foreach)
+  library(doParallel)
+}))
+```
+
+```{r}
+N <-200
+E <-1000
+```
+
+```{r}
+lambda<-0.15
+mu<-0.4
+delta<-0.6
+gamma<-0
+```
+
+```{r}
+set.seed(111)
+pl <- static.power.law.game(N, E, exponent.out= 2.5, exponent.in = -1, loops = FALSE, multiple = FALSE)
+```
+
+```{r}
+B <- get.adjacency(pl, type="both",sparse=FALSE)
+```
+
+```{r}
+plot(pl, layout=layout_as_tree)
+```
+
+```{r}
+write.csv(B, file = "D:\\实习代码\\程子祚\\0724\\R\\0724\\01.csv")
+```
+
+```{python}
+import pandas as pd
+import random
+
+node_count = 100
+extra_edge = 40
+
+csv_data = pd.read_csv("01.csv", index_col = 0)
+coordinate_list = []
+
+for i in range(node_count):
+    for j in range(1,i):
+        if csv_data.iat[i,j] == 0:
+            coordinate_list.append([i,j])
+
+random_extra_edge = random.sample(range(len(coordinate_list)),extra_edge)
+
+for i in random_extra_edge:
+    csv_data.iat[coordinate_list[i][0],coordinate_list[i][1]] = 1
+
+for i in range(node_count):
+    for j in range(i+1, node_count):
+        csv_data.iat[i,j] = csv_data.iat[j,i]
+
+csv_data.to_csv('02.csv')
+```
+
+```{r}
+C <- read.table("02.csv",sep = ',',header = T, row.names = 1)
+
+```
+
+```{r}
+A <- as.matrix(C)
+```
+
+```{r}
+#1. 收集图3所用数据
+#刻度 scale  
+get_rhoA_rhoI_data<-function(l){
+  #相当于给无意识的易感者一个初始被感染概率
+  beta_U<-l/ter
+  
+  # MMCA
+  MMCA<-100
+  
+  #给定一个初始状态概率值
+  #0.01 0.05 0.1 0.2 0.3 
+  PAI<-rep(0.2,N)   #probability of awareness-infected
+  #0.1 0.2 0.3 0.4 0.5 
+  PUS<-rep(0.6,N)   #probability of unawareness-susceptible
+  #probability of awareness-susceptible
+  PAS<-rep(0.2,N)   
+
+  
+  #构建0值序列，存储状态更新值
+  PAI_UPDATE<-rep(0,N)
+  PUS_UPDATE<-rep(0,N)
+  PAS_UPDATE<-rep(0,N)
+  
+
+
+  #文章中的公式（1）三个概率值
+  #the probability for node i not getting the information by any neighbors.
+  r<-rep(0,N)
+  #the probability for node i not being infected by any neighbors if i was unaware.
+  qu<-rep(0,N)
+  #the probability for node i not being infected by any neighbors if i was aware.
+  qa<-rep(0,N)
+  
+  #N维方阵,还是对应公式（1），需要进行矩阵运算，所以这里构建一个方阵来存储数据
+  R<-matrix(0, nrow = N, ncol = N)
+  QU<-matrix(0, nrow = N, ncol = N)
+  QA<-matrix(0, nrow = N, ncol = N)
+  
+  #t:时间步
+  #i:节点i
+  #j:i的邻居节点
+  for(t in 1:MMCA){
+    for (i in 1:N){
+      for(j in 1:N){
+        
+        R[j,i]<-1-A[j,i]*(PAI[j]+PAS[j])*lambda
+        
+        QU[j,i]=1-B[j,i]*PAI[j]*beta_U
+        #alpha概率到行为   gamma概率降低被感染概率
+        QA[j,i]=1-B[j,i]*PAI[j]*beta_U
+      }  
+      #return the product(乘积) of all the values 
+      r[i]<-prod(R[,i])
+      qu[i]<-prod(QU[,i])
+      qa[i]<-prod(QA[,i])
+      
+      #马尔科夫转移状态
+      #公式（2）
+      PUS_UPDATE[i]<-PAI[i]*delta*mu+
+          PUS[i]*r[i]*qu[i]+
+          PAS[i]*qu[i]*delta
+      
+      PAS_UPDATE[i]<-
+        PAI[i]*(1-delta)*mu+
+        PUS[i]*(1-r[i])*qa[i]+
+        PAS[i]*(1-delta)*qa[i]
+      
+      PAI_UPDATE[i]<-PAI[i]*(1-mu)+
+        PUS[i]*((1-r[i])*(1-qa[i])+r[i]*(1-qu[i]))+
+        PAS[i]*(delta*(1-qu[i])+(1-delta)*(1-qa[i]))
+      
+    }
+    
+    PAI=PAI_UPDATE
+    PUS=PUS_UPDATE
+    PAS=PAS_UPDATE
+  }
+  
+  PA<-PAS+PAI
+  PI<-PAI
+  
+  #整体平均情况
+  rho_A[l]=sum(PA)/N
+  rho_I[l]=sum(PI)/N
+  
+  rho_AI<-data.frame(l,beta_U,rho_A[l],rho_I[l])
+}
+```
+
+```{r}
+#查看本地核数
+n_core<-detectCores(logical = F)
+
+system.time({
+  cl<- makeCluster(n_core)      
+  registerDoParallel(cl)       #进行进程注册
+  clusterEvalQ(cl, {
+    ter<-100
+    N<-1000 
+    rho_A<-1:ter
+    rho_I<-1:ter
+  }) 
+  Exp1_data <- foreach(
+    l=1:100,          #输入等待请求的参数
+    .combine=rbind   #返回结果的整合
+    #.packages = c("igraph") 
+    #多个进程共享的系统环境
+  ) %dopar% get_rhoA_rhoI_data(l)
+  stopCluster(cl)
+})
+```
+
+```{r}
+#迭代次数设置为50
+ter<-100
+#收集β的值，最后画出Fig3
+
+#有意识的比例均值，即Top comparasion
+rho_A_1<-1:ter
+#感染者的比例均值，即Bottom comparasion
+rho_I_1<-1:ter
+
+#看样子这句是创建了一个进度条
+pb1<-progress_bar$new(format = "finished[:bar] :percent of exexuted time:elapsed",
+                     total = ter, clear = FALSE, width = 60)
+
+for(l in 1:ter){
+  pb1$tick()
+  
+  #给无意识的感染者一个初始被感染概率
+  beta_U = l/ter
+  
+  #MMCA,没看明白这里是什么意思
+  MMCA = 30
+  
+  #给定一个初始状态概率值（或者说是比例？）
+  PAI<-rep(0.2,N)   #AI群体的概率
+  PUS<-rep(0.6,N)   #US群体的概率
+  PAS<-rep(0.2,N)   #AS群体的概率
+  
+  #构建0值序列，存储状态更新值
+  PAI_UPDATE<-rep(0,N)
+  PUS_UPDATE<-rep(0,N)
+  PAS_UPDATE<-rep(0,N)
+  
+  #公式（1）中的三个概率值
+  #the probability for node i not getting the information by any neighbors.
+  r<-rep(0,N)
+  #the probability for node i not being infected by any neighbors if i was aware.
+  qa<-rep(0,N)
+  #the probability for node i not being infected by any neighbors if i was unaware.
+  qu<-rep(0,N)
+
+  
+  #构建矩阵
+  R<-matrix(0, nrow = N, ncol = N)
+  QA<-matrix(0, nrow = N, ncol = N)
+  QU<-matrix(0, nrow = N, ncol = N)
+  
+  
+  #t:时间步
+  #i:节点i
+  #j:i的邻居节点
+  for(t in 1:MMCA){
+    for (i in 1:N){
+      for (j in 1:N){
+        #A为信息层
+        R[j,i]=1-A[j,i]*(PAI[j]+PAS[j])*lambda
+        QA[j,i]=1-B[j,i]*PAI[j]*gamma*beta_U
+        QU[j,i]=1-B[j,i]*PAI[j]*beta_U
+      }
+      #返回所有值的乘积
+      r[i]<-prod(R[,i])
+      qu[i]<-prod(QU[,i])
+      qa[i]<-prod(QA[,i])
+    
+      #马尔可夫转移状态
+      #公式（2）
+      PUS_UPDATE[i]<-
+        PAI[i]*delta*mu+
+        PUS[i]*r[i]*qu[i]+
+        PAS[i]*qu[i]*delta
+    
+      PAS_UPDATE[i]<-
+        PAI[i]*(1-delta)*mu+
+        PUS[i]*(1-r[i])*qa[i]+
+        PAS[i]*(1-delta)*qa[i]
+    
+      PAI_UPDATE[i]<-
+        PAI[i]*(1-delta)*mu+
+        PUS[i]*((1-r[i])*(1-qa[i]))+
+        PAS[i]*(delta*(1-qu[i])+(1-delta)*(1-qa[i]))        
+    }
+    
+    PAI=PAI_UPDATE
+    PUS=PUS_UPDATE
+    PAS=PAS_UPDATE
+  }
+  PA<-PAS+PAI
+  
+  PI<-PAI
+  
+  rho_A_1[l]=sum(PA)/N
+  rho_I_1[l]=sum(PI)/N
+  
+}
+```
+
+```{r}
+data<-Exp1_data %>% 
+  select(-1) %>% 
+  purrr::set_names(c("beta_U","rho_A","rho_I"))
+
+names(data)
+
+ggplot(data,aes(x=beta_U,y=rho_A))+
+  geom_point()+
+  theme_few()+
+  xlab(expression(beta^U))+
+  ylab(expression(rho^A))+
+  theme(legend.title=element_blank(),
+        legend.position="none") 
+ggsave("rhoA_betaU_fig3_MMCA.png",width=15, height=15,units="cm",dpi = 600)
+
+
+
+ggplot(data,aes(x=beta_U,y=rho_I))+
+  geom_point()+
+  theme_few()+
+  xlab(expression(beta^U))+
+  ylab(expression(rho^I))+
+  theme(legend.title=element_blank(),
+        legend.position="none") 
+
+ggsave("rhoI_betaU_fig3_MMCA.png",width=15, height=15,units="cm",dpi = 600)
+```
+
+MC
+
+```{r}
+#物理层初始概率
+initial_phy<-0.1
+#信息层初始概率
+initial_vir<-0.1
+
+#状态更新次数
+stp<-30
+
+rho_A_NEW<-matrix(0, nrow = 20, ncol = 20)
+rho_I_NEW<-matrix(0, nrow = 20, ncol = 20)
+
+pb2 <- progress_bar$new(format = "  percent [:bar] :percent finished time :elapsed",
+                       total = stp, clear = FALSE, width= 60)
+
+for(rep in 1:20){
+  pb2$tick()
+  
+  #把1进行20等分，赋给beta_U，观察其对变量的影响
+  termi<-30
+  
+  #因变量
+  rho_A_2<-1:termi
+  rho_I_2<-1:termi
+  
+  for(l in 1:termi){
+    beta_U<-1/termi
+    
+    #stp:状态更新次数
+    for(t in 1:stp){
+      #设置物理层初始状态
+      #MC generates random deviates about the uniform distribution
+      #产生随机数，并进行判断<----蒙特卡洛
+      x<-runif(N,min=0,max=1)
+      x<-ifelse(x>initial_phy,0,1)
+      
+      #设置信息层初始状态
+      m<-runif(N,min=0,max=1)
+      x<-ifelse(x>initial_vir,0,1)
+      
+      n<-rep(0,N) #收集更新信息层节点防范意识信息，初始为m
+      y<-rep(0,N) #收集更新物理层节点感染信息，初始为x
+      
+      for(i in 1:N){
+        
+        #第一步，更新信息层
+        #信息层为知道时
+        if(m[i]==1){
+          #节点被感染
+          if(x[i]==1){
+            #state:AI
+            #没有忘记，生成一个随机0-1的数值
+            if(runif(1,min=0,max=1)>delta){
+              n[i]=1
+            }else{
+            #忘记
+              n[i]=0
+            }
+          }else{
+            #节点未感染
+            if(runif(i,min=0,max=1)>delta){
+              n[i]=1
+            }else{
+            #不忘记
+              n[i]=0
+            }
+          }
+        }else{
+          n[i]=0
+          for(j in 1:N){
+            #通过邻居节点更新意识状态
+            if ((A[j,i]==1)&(m[j]==1)&(runif(1,min=0,max=1)<lambda)){
+              n[i]=1
+            }
+          }
+        }
+        #第二步，更新物理层
+        if(x[i]==1){
+          if(runif(1,min=0,max=1)<mu){
+            y[i]=0  #recovered
+          }else{
+            y[i]=1  #infected
+          }
+        }else if(n[i]==0){
+          y[i]=0
+          for(j in 1:N){
+            if((B[j,i]==1)&(x[j]==1)&(runif(1,min=0,max=1)< beta_U)){
+              y[i]=1
+            }
+          }
+        }else{
+          y[i]=0
+          for(j in 1:N){
+            if((B[j,i]==1)&(x[j]==1)&(runif(1,min=0,max=1)<(gamma*beta_U))){
+              y[i]=1
+            }
+          }
+        }
+      }
+      m<-n#将n更新给m
+      x<-y#将y更新给x
+    }
+    rho_A_2[l]=sum(m)/N#收集有意识节点的比例
+    rho_I_2[l]=sum(x)/N#收集感染者比例
+  }
+  
+  rho_A_NEW[rep,]=rho_A_2
+  rho_I_NEW[rep,]=rho_I_2
+}
+```
+
+```{r}
+rho_A_AVER<-colMeans(rho_A_NEW)
+rho_I_AVER<-colMeans(rho_I_NEW)
+
+#   MC     ROU VS BETA作图
+X_axis_2=(1:termi)/termi   #x轴
+
+
+MC_df<-data.frame(X_axis_2, rho_A_AVER)
+
+ggplot(MC_df,aes(x=X_axis_2,y=rho_A_AVER))+
+  geom_point()+
+  theme_few()+
+  ylim(0,1)+
+  xlab(expression(beta^U))+
+  ylab(expression(rho^A))+
+  theme(legend.title=element_blank(),
+        legend.position="none",
+        axis.line = element_line(colour = "black")) 
+
+MC_df1<-data.frame(X_axis_2, rho_I_AVER)
+
+ggplot(MC_df1,aes(x=X_axis_2,y=rho_I_AVER))+
+  geom_point()+
+  theme_few()+
+  ylim(0,1)+
+  xlab(expression(beta^U))+
+  ylab(expression(rho^I))+
+  theme(legend.title=element_blank(),
+        legend.position="none",
+        axis.line = element_line(colour = "black")) 
+```
+
+```{r}
+get_rhoA_rhoI_by_beta_lamda<-function(l1){
+  
+  beta_U<-(2*l1)/(2*ter)
+  
+  for(l2 in 1:ter){
+    
+    #相当于给无意识的易感者一个初始被感染概率
+    lamda<-l2/ter
+    
+    # MMCA
+    MMCA<-20
+    
+    #给定一个初始状态概率值
+    PAI<-rep(0.2,N)   #probability of awareness-infected
+    PUS<-rep(0.4,N)   #probability of unawareness-susceptible
+    PAS<-rep(0.4,N)   #probability of awareness-susceptible
+    
+    #构建0值序列，存储状态更新值
+    PAI_UPDATE<-rep(0,N)
+    PUS_UPDATE<-rep(0,N)
+    PAS_UPDATE<-rep(0,N)
+    
+    #文章中的公式（1）三个概率值
+    #the probability for node i not getting the information by any neighbors.
+    r<-rep(0,N)
+    #the probability for node i not being infected by any neighbors if i was unaware.
+    qu<-rep(0,N)
+    #the probability for node i not being infected by any neighbors if i was aware.
+    qa<-rep(0,N)
+    
+    #N维方阵,还是对应公式（1），需要进行矩阵运算，所以这里构建一个方阵来存储数据
+    R<-matrix(0, nrow = N, ncol = N)
+    QU<-matrix(0, nrow = N, ncol = N)
+    QA<-matrix(0, nrow = N, ncol = N)
+    
+    #t:时间步
+    #i:节点i
+    #j:i的邻居节点
+    for(t in 1:MMCA){
+      for (i in 1:N){
+        for(j in 1:N){
+          R[j,i]<-1-A[j,i]*(PAI[j]+PAS[j])*lamda
+          
+          QU[j,i]=1-B[j,i]*PAI[j]*beta_U
+          #alpha概率到行为   gamma概率降低被感染概率
+          QA[j,i]=1-B[j,i]*PAI[j]*beta_U
+        }  
+        #return the product(乘积) of all the values 
+        r[i]<-prod(R[,i])
+        qu[i]<-prod(QU[,i])
+        qa[i]<-prod(QA[,i])
+        
+        #马尔科夫转移状态
+        #公式（2）
+        PUS_UPDATE[i]<-PAI[i]*delta*mu+
+          PUS[i]*r[i]*qu[i]+
+          PAS[i]*qu[i]*delta
+        
+        PAS_UPDATE[i]<-
+          PAI[i]*(1-delta)*mu+
+          PUS[i]*(1-r[i])*qa[i]+
+          PAS[i]*(1-delta)*qa[i]
+        
+        PAI_UPDATE[i]<-PAI[i]*(1-mu)+
+          PUS[i]*((1-r[i])*(1-qa[i])+r[i]*(1-qu[i]))+
+          PAS[i]*(delta*(1-qu[i])+(1-delta)*(1-qa[i]))
+      }
+      
+      PAI=PAI_UPDATE
+      PUS=PUS_UPDATE
+      PAS=PAS_UPDATE
+    }
+    
+    PA<-PAS+PAI
+    PI<-PAI
+    
+    #整体平均情况
+    rho_A[l1]=sum(PA)/N
+    rho_I[l1]=sum(PI)/N
+    
+    
+    rho_AI<-data.frame(rho_A[l1],rho_I[l1])
+    
+    temp1<-data.frame(l1,beta_U,lamda,rho_AI)
+    
+    temp2<-rbind(temp2,temp1)
+  }
+  return(temp2)
+}
+```
+
+```{r}
+n_core<-detectCores(logical = F)
+t1<-Sys.time()
+
+system.time({
+  cl<- makeCluster(n_core)      
+  registerDoParallel(cl)       #进行进程注册
+  clusterEvalQ(cl, {
+    ter<-50
+    N<-200 
+    rho_A<-1:ter
+    rho_I<-1:ter
+    temp2<-data.frame()
+  }) 
+  Exp2_data <- foreach(
+    l1=1:50,          #输入等待请求的参a数
+    .combine=rbind   #返回结果的整合
+    #.packages = c("igraph") 
+    #多个进程共享的系统环境
+  ) %dopar% get_rhoA_rhoI_by_beta_lamda(l1)
+  stopCluster(cl)
+})
+
+t2<-Sys.time()
+t2-t1 
+```
+
+```{r}
+names(Exp2_data)
+
+data<-Exp2_data %>% 
+  purrr::set_names(c("l1","beta_U","lamda","rho_A","rho_I")) %>% 
+  select(-1) 
+
+ggplot(data,aes(x=beta_U,y=lamda,fill=rho_I))+
+  geom_raster() +
+  scale_fill_gradientn(colours =rainbow(2))+
+  theme_few()+
+  scale_x_continuous(limits = c(0,1),
+                     breaks = c(0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1))+
+  scale_y_continuous(limits = c(0,1),
+                     breaks = c(0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1))+
+  xlab(expression(beta))+
+  ylab(expression(lambda))+
+  guides(fill=guide_colorbar(title= expression(rho^I),title.hjust =  .2))
+
+ggsave("fig4_rhoI.png",width=15, height=13,units="cm",dpi = 600)
+```
