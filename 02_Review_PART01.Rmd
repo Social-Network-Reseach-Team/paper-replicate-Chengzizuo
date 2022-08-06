@@ -1,0 +1,259 @@
+---
+title: "0803Review"
+author: "程子祚"
+date: '2022-08-03'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Replicator dynamics for involution in an infinite well-mixed population
+
+## 1.1 Replicator Dynamics
+
+The concept of replicator dynamics is used to **express the evolutionary dynamics of an entity called replicator which has means of making more or less accurate copies of itself.** The replicator can be a gene, an organism, a strategy in a game, a belief, a technique, a convention, or any institutional or cultural form. In the following, game strategies will be considered.
+
+The concept assumes a large population of replicators, in which different types meet in proportion to their share in the population. This meeting - i.e. the interaction of different replicators (e.g. different strategies in a game) - generates payoffs, which are interpreted as an replicator's fitness. Replicators reproduce with regard to their fitness in relation to the fitness of others. **The general idea is that replicators whose fitness is larger (smaller) than the average fitness of the population will increase (decrease) their share in the population.**
+
+**In evolutionary game theory replicators are strategies, which compete for dominance according to the payoff they yield in interaction.** Typical examples are the strategies of cooperation and defection in games like the Prisoners Dilemma or the Public Good Game. Similar to dominant strategies bringing forth Nash equilibria when games are repeated, **strategies in replicator dynamics can become evolutionary stable.**
+
+An **Evolutionarily Stable Strategy** (ESS) is a strategy which, if adopted by a population in a given environment, cannot be invaded by any alternative strategy that is initially rare.
+
+Mathematically, replicator dynamics are expressed in the form of so called replicator equations, which is a set of differential equations used to study dynamics in evolutionary game theory. The replicator dynamics provide a simple model of evolution and success-driven (or prestige-biased) learning in games.
+
+## 1.2 Well-Mixed population
+
+Population dynamics describes the changes of the composition of a group of individuals over time. Broadly speaking, there are two modelling approaches. One involves well-mixed populations, implying an all-to-all interaction. This is contrasted with structured populations, or populations on networks. **Mathematically, the interaction network of well-mixed populations is often assumed to be a 'complete graph', i.e., a network in which interaction links exist between any two individuals at all times.** In the context of epidemics, for example, an infection event can affect any of the susceptible individuals in the population; **in evolutionary dynamics, it indicates that competition occurs between all members of the population.** This effectively means that there is no spatial structure at all, or at least that interaction is sufficiently long-range that spatial structure is not relevant for the evolutionary process.
+
+## 1.3 Pre
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(EvolutionaryGames)
+library(ggthemes)
+library(latex2exp)
+library(ggtext)
+```
+
+```{r}
+duplicate_dynamic<-function(y,M,beta,d,N,c){
+  
+  #-----参数解释说明------#
+  # #N个个体
+  # N<-4
+  # #M资源 c(5,15,25)
+  # M<-5
+  # #less effort的成本
+  # c<-1
+  # #投入效用
+  # beta<-1
+  # #more effort的成本
+  # d<-4
+  #-----------------------#
+  
+  #这里决定用N-1
+  #需要取整
+  Nd<-floor(y*(N-1)) 
+  Nc<-N-1-Nd
+  
+  #策略c（cooperate, less effort）和策略d(defect，more effort)的收益
+  #（1）个体选择策略c的期望收益
+  pai_c<-(c*M)/((Nc+1)*c+Nd*beta*d)-c
+  #（2）个体选择策略d的期望收益
+  pai_d<-(beta*d*M)/(Nc*c+(Nd+1)*beta*d)-d
+  
+  #群体体选择策略c或d的收益  = 概率*pai
+  #等价Pc<(choose(N-1, Nc)*((1-y)^Nc)*(y^Nd))*pai_c
+  Pc<-(choose(N-1, Nd)*(y^Nd)*((1-y)^Nc))*pai_c
+  Pd<-(choose(N-1, Nd)*(y^Nd)*((1-y)^Nc))*pai_d #choose计算组合数
+  
+  #（3）群体选择策略d的平均收益
+  R_<-y*Pd+(1-y)*Pc
+  
+  #(4)复制动态方程
+  #y.<-y(Pd-R_) = y(Pd-y*Pd-(1-y)*Pc) = y(1-y)(Pd-Pc)
+  y.<-y*(1-y)*(Pd-Pc)
+}
+```
+
+## 2.1 Fig1
+
+```{r}
+plot_y._y<-function(M){
+  y.<-c()
+  
+  for(y in seq(0, 1, 0.01)){
+    temp<-duplicate_dynamic(y,M,beta=1,d=4,N=100,c=1)
+    
+    # N: 个体数
+    # M: 资源 c(5,15,25)
+    # c: less effort的成本
+    # beta: 投入效用
+    # d: more effort的成本
+    
+    y.<-c(y.,temp)
+  }
+    
+  df <- data.frame(x = seq(0, 1, 0.01), y = y.) %>% 
+    mutate(y1=c(y.[-1],1)) %>% 
+    mutate(y0=y*y1)
+  
+  #ystar<-df$x[df$y0<0]+0.005 #即横坐标
+  
+  ystar<-ifelse(sum(df$x[df$y0<0])==0,0,df$x[df$y0<0]+0.005)
+  
+  ggplot(df,aes(x=x,y=y))+
+    geom_line(color="black",size=0.3)+
+    theme_few() +
+    geom_point(aes(x=ystar,y=0))+
+    geom_text(aes(x=ystar,y=0),label=paste("y*:",ystar),size=4,nudge_y = 0.001,nudge_x = 0.03,color="red")+
+    geom_hline(aes(yintercept = 0),size=0.3)+
+    labs(x = "y", y = "y.")
+}
+```
+
+```{r}
+#---1. fig1 (a1)---#
+plot_y._y(M=100)
+
+#---2. fig1 (b1)---#
+plot_y._y(M=200)
+
+#---3. fig1 (c1)---#
+plot_y._y(M=398)#右临界资源值
+```
+
+```{r}
+
+```
+
+## 2.2 Fig2
+
+```{r}
+ystar_collect<-function(M,beta,d){
+  
+  y.<-c()
+  
+  for(y in seq(0, 1, 0.01)){
+    temp<-duplicate_dynamic(y,M,beta,d,N=100,c=1)
+    
+    # N: 个体数
+    # M: 资源 c(5,15,25)
+    # c: less effort的成本
+    # beta: 投入效用
+    # d: more effort的成本
+    
+    y.<-c(y.,temp)
+  }
+  
+  df <- data.frame(x = seq(0, 1, 0.01), y = y.) %>% 
+    mutate(y1=c(y.[-1],1)) %>% 
+    mutate(y0=y*y1)
+  
+  #ystar<-ifelse(sum(df$x[df$y0<0])==0,0,df$x[df$y0<0]+0.005)
+  if(all(df$y<=0)){
+    ystar<-0 
+  }else if(all(df$y>=0)){
+    ystar<-1
+  }else{
+    ystar<-df$x[df$y0<0]+0.005
+  }
+  
+  return(ystar)
+}
+```
+
+```{r}
+#均衡ystar值收集
+parameters<-data.frame(beta=c(1,1,1,0.6,0.6,0.6),d=c(2,4,8,2,4,8))
+
+result<-data.frame()
+
+for(i in 1:6){
+  beta<-parameters$beta[i]
+  d<-parameters$d[i]
+  
+  ystars<-c()
+  
+  for (M in seq(0,1000,10)){
+    temp<-ystar_collect(M,beta,d)
+    ystars<-c(ystars,temp)
+  }
+  
+  data<-data.frame(beta=rep(beta,length(ystars)),d=rep(d,length(ystars)),M=seq(0,1000,10),ystar=ystars)
+  
+  result<-rbind(result,data)
+}
+```
+
+```{r}
+#数据可视化
+df<-result %>% 
+  mutate(label=paste("beta=",beta,",","d=",d,sep=""))
+
+ggplot(df,aes(x=M,y=ystar,color=label))+
+  geom_line()+
+  geom_point()+
+  theme_few()
+```
+
+## Fig3
+
+```{r}
+ystar_collect<-function(M,beta,d){
+  
+  y.<-c()
+  
+  for(y in seq(0, 1, 0.01)){
+    temp<-duplicate_dynamic(y,M,beta,d,N=100,c=1)
+    
+    # N: 个体数
+    # M: 资源 c(5,15,25)
+    # c: less effort的成本
+    # beta: 投入效用
+    # d: more effort的成本
+    
+    y.<-c(y.,temp)
+  }
+  
+  df <- data.frame(x = seq(0, 1, 0.01), y = y.) %>% 
+    mutate(y1=c(y.[-1],1)) %>% 
+    mutate(y0=y*y1)
+  
+  #ystar<-ifelse(sum(df$x[df$y0<0])==0,0,df$x[df$y0<0]+0.005)
+  if(all(df$y<=0)){
+    ystar<-0 
+  }else if(all(df$y>=0)){
+    ystar<-1
+  }else{
+    ystar<-df$x[df$y0<0]+0.005
+  }
+  
+  return(ystar)
+}
+```
+
+```{r}
+parameters<-data.frame(M=c(500,500,500,250,250,250),d=c(2,4,8,2,4,8))
+
+result<-data.frame()
+
+for(i in 1:6){
+  beta<-parameters$M[i]
+  d<-parameters$d[i]
+  
+  ystars<-c()
+  
+  for (beta in seq(0,1.2,0.2)){
+    temp<-ystar_collect(M,beta,d)
+    ystars<-c(ystars,temp)
+  }
+  
+  data<-data.frame(M=rep(M,length(ystars)),d=rep(d,length(ystars)),beta=seq(0,1.2,0.2),ystar=ystars)
+  
+  result<-rbind(result,data)
+}
+```
